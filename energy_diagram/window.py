@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -46,7 +48,7 @@ from PySide6.QtWidgets import (
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from . import model, parsers, render
+from . import analyzers, model, parsers, render
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +287,11 @@ class DiagramWindow(QMainWindow):
                 self.compound_from_document,
                 "The output file open in MoleditPy, named after it.",
             ),
+            (
+                "From Result Analyzer...",
+                self.compounds_from_analyzers,
+                "Values the ORCA, Gaussian or GAMESS Result Analyzer has read.",
+            ),
             ("Remove", self.remove_compound, "Remove the selected rows."),
         ):
             button = QPushButton(text)
@@ -294,6 +301,9 @@ class DiagramWindow(QMainWindow):
             if text == "From Open Document":
                 button.setEnabled(self.context is not None)
                 self.btn_from_document = button
+            elif text == "From Result Analyzer...":
+                self.btn_from_analyzer = button
+        self._update_analyzer_button()
         layout.addLayout(buttons)
         return page
 
@@ -773,6 +783,17 @@ class DiagramWindow(QMainWindow):
             self._refresh_values()
             self._changed()
 
+    def _put_compound(self, name: str, energy: float, source: str) -> model.Compound:
+        existing = next((c for c in self.diagram.compounds if c.name == name), None)
+        if existing is not None:
+            # Reading the same file again updates its value in place, so the
+            # levels that name it follow a re-run calculation.
+            existing.energy, existing.source = energy, source
+            return existing
+        compound = model.Compound(name=name, energy=energy, source=source)
+        self.diagram.compounds.append(compound)
+        return compound
+
     def add_output(self, path: str) -> model.Compound | None:
         """One compound from an output file, with the quantity chosen."""
         quantity = self.cmb_quantity.currentData()
@@ -781,16 +802,7 @@ class DiagramWindow(QMainWindow):
         except (parsers.OutputError, OSError) as exc:
             QMessageBox.warning(self, TITLE, str(exc))
             return None
-        name = parsers.compound_name(path)
-        existing = next((c for c in self.diagram.compounds if c.name == name), None)
-        if existing is not None:
-            # Reading the same file again updates its value in place, so the
-            # levels that name it follow a re-run calculation.
-            existing.energy, existing.source = energy, source
-            compound = existing
-        else:
-            compound = model.Compound(name=name, energy=energy, source=source)
-            self.diagram.compounds.append(compound)
+        compound = self._put_compound(parsers.compound_name(path), energy, source)
         self.session.last_dir = os.path.dirname(path)
         return compound
 
@@ -823,6 +835,39 @@ class DiagramWindow(QMainWindow):
             self._fill_compounds()
             self._refresh_values()
             self._changed()
+
+    def _update_analyzer_button(self) -> None:
+        # Without a Result Analyzer plugin there is nothing to offer.
+        self.btn_from_analyzer.setVisible(bool(analyzers.installed()))
+
+    def compounds_from_analyzers(self) -> None:
+        results = analyzers.open_results(QApplication.topLevelWidgets())
+        found = [v for r in results for v in analyzers.values(r)]
+        if not found:
+            QMessageBox.information(
+                self,
+                TITLE,
+                "No Result Analyzer window has an output file with energies open. Open the "
+                "calculation in the ORCA, Gaussian or GAMESS Result Analyzer first.",
+            )
+            return
+        dialog = AnalyzerValuesDialog(found, self.cmb_quantity.currentData(), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.add_analyzer_values(dialog.chosen())
+
+    def add_analyzer_values(self, chosen) -> list:
+        """Add or update one compound per (name, Value) pair."""
+        added = [self._put_compound(name, v.energy, v.source()) for name, v in chosen]
+        if added:
+            self._fill_compounds()
+            self._refresh_values()
+            self._changed()
+        return added
+
+    def showEvent(self, event) -> None:
+        self._update_analyzer_button()
+        super().showEvent(event)
 
     # ================================================================ figure
     def redraw(self) -> None:
@@ -1102,6 +1147,72 @@ class DiagramWindow(QMainWindow):
         if self._session_changed in self.session.listeners:
             self.session.listeners.remove(self._session_changed)
         super().closeEvent(event)
+
+
+class AnalyzerValuesDialog(QDialog):
+    """Tick the analyzer values to keep as compounds; names can be edited."""
+
+    COL_USE, COL_FILE, COL_VALUE, COL_ENERGY, COL_NAME = range(5)
+
+    def __init__(self, found, quantity: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Energies from the Result Analyzer")
+        self.found = list(found)
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Tick the values to add as compounds. A compound with the same name is updated. "
+            "A correction can be added to a single point at another level, "
+            "e.g. \u201cTS1_sp + TS1_Gcorr\u201d."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.table = QTableWidget(len(self.found), 5)
+        self.table.setHorizontalHeaderLabels(["Use", "File", "Value", "Energy (Eh)", "Name"])
+        self.table.verticalHeader().setVisible(False)
+        locked = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+        for row, value in enumerate(self.found):
+            use = QTableWidgetItem()
+            use.setFlags(locked | Qt.ItemFlag.ItemIsUserCheckable)
+            checked = Qt.CheckState.Checked if value.key == quantity else Qt.CheckState.Unchecked
+            use.setCheckState(checked)
+            self.table.setItem(row, self.COL_USE, use)
+            cells = (
+                (self.COL_FILE, f"{os.path.basename(value.result.path)} ({value.result.program})"),
+                (self.COL_VALUE, value.description),
+                (self.COL_ENERGY, f"{value.energy:.8f}"),
+            )
+            for col, text in cells:
+                item = QTableWidgetItem(text)
+                item.setFlags(locked)
+                item.setToolTip(value.result.path if col == self.COL_FILE else text)
+                self.table.setItem(row, col, item)
+            self.table.setItem(row, self.COL_NAME, QTableWidgetItem(value.suggested_name(quantity)))
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
+        layout.addWidget(self.table, 1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.resize(760, 380)
+
+    def set_checked(self, row: int, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self.table.item(row, self.COL_USE).setCheckState(state)
+
+    def chosen(self) -> list:
+        """(name, Value) for every ticked row with a name."""
+        picked = []
+        for row, value in enumerate(self.found):
+            if self.table.item(row, self.COL_USE).checkState() != Qt.CheckState.Checked:
+                continue
+            name = self.table.item(row, self.COL_NAME).text().strip()
+            if name:
+                picked.append((name, value))
+        return picked
 
 
 def loaded_smiles(context) -> str:

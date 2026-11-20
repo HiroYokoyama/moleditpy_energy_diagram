@@ -22,6 +22,11 @@ MoleditPy never clears it, so values can be gathered across many output files.
   (electronic energy *E*, enthalpy *H* or Gibbs free energy *G*; the last value in the
   file is used). **From Open Document** reads the output file MoleditPy has open. Reading
   a file again updates the compound with the same name. Energies can also be typed.
+- **From Result Analyzer**: when the ORCA, Gaussian or GAMESS Result Analyzer plugin is
+  installed, pick any value it has read from the open output file: final SCF energy,
+  E + ZPE, U, H, G, or the ZPE, enthalpy and Gibbs corrections (for example a
+  high-level single point plus a low-level `Gcorr`). Without an analyzer the button
+  does not appear.
 - **Levels**: each level's energy is a number in the input unit or an expression of
   compounds, for example `cat + sub`, `TS1 - cat`, `2*monomer` or `{Pd(PPh3)2} + L`.
   Values are shown relative to the first level of the first visible pathway, in

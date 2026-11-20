@@ -388,3 +388,101 @@ def test_structure_from_the_loaded_molecule(plugin, answers):
     window.levels.selectRow(0)
     window.structure_from_loaded()
     assert window.diagram.pathways[0].levels[0].smiles == "CCO"
+
+
+# ------------------------------------------------------- result analyzers
+
+
+@pytest.fixture
+def orca_analyzer(monkeypatch, qapp):
+    """A loaded 'ORCA Result Analyzer' plugin with one window showing TS-1.out."""
+    import types
+
+    from PySide6.QtWidgets import QDialog
+
+    module = types.ModuleType("fake_orca_analyzer")
+    module.__package__ = "fake_orca_analyzer"
+    module.PLUGIN_NAME = "ORCA Result Analyzer"
+    monkeypatch.setitem(__import__("sys").modules, "fake_orca_analyzer", module)
+    dialog_class = type(
+        "OrcaResultAnalyzerDialog", (QDialog,), {"__module__": "fake_orca_analyzer.gui"}
+    )
+    analyzer = dialog_class()
+    analyzer.parser = types.SimpleNamespace(
+        data={
+            "scf_energy": -100.0,
+            "thermal": {
+                "electronic_energy": -100.0,
+                "zpe": 0.05,
+                "gibbs": -99.97,
+                "gibbs_corr": 0.03,
+            },
+        }
+    )
+    analyzer.file_path = "/calc/TS-1.out"
+    yield analyzer
+    analyzer.close()
+    analyzer.deleteLater()
+
+
+def test_the_analyzer_button_is_hidden_without_an_analyzer(window):
+    assert window.btn_from_analyzer.isHidden()
+
+
+def test_the_analyzer_button_shows_when_an_analyzer_is_loaded(orca_analyzer, window):
+    assert not window.btn_from_analyzer.isHidden()
+
+
+def test_no_open_analyzer_file_is_explained(orca_analyzer, window, answers):
+    window.compounds_from_analyzers()  # the analyzer window is not shown
+    assert "Open the calculation in the ORCA" in answers[1][-1]
+    assert window.diagram.compounds == []
+
+
+def test_picking_values_from_an_open_analyzer(orca_analyzer, window, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from energy_diagram import window as window_module
+
+    orca_analyzer.show()
+    seen = {}
+
+    def run(dialog):
+        seen["rows"] = [(v.key, dialog.table.item(r, 4).text()) for r, v in enumerate(dialog.found)]
+        seen["ticked"] = [name for name, _ in dialog.chosen()]
+        dialog.set_checked(next(r for r, v in enumerate(dialog.found) if v.key == "Gcorr"), True)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(window_module.AnalyzerValuesDialog, "exec", run)
+    window.compounds_from_analyzers()
+    assert seen["rows"] == [
+        ("E", "TS_1_E"),
+        ("EZPE", "TS_1_EZPE"),
+        ("G", "TS_1"),
+        ("ZPE", "TS_1_ZPE"),
+        ("Gcorr", "TS_1_Gcorr"),
+    ]
+    assert seen["ticked"] == ["TS_1"]  # the quantity chosen under Take: is ticked
+    assert [(c.name, c.energy, c.source) for c in window.diagram.compounds] == [
+        ("TS_1", -99.97, "ORCA Result Analyzer G: TS-1.out"),
+        ("TS_1_Gcorr", 0.03, "ORCA Result Analyzer Gcorr: TS-1.out"),
+    ]
+    # Picking again after a re-run updates the compounds instead of adding more.
+    orca_analyzer.parser.data["thermal"]["gibbs"] = -99.98
+    window.compounds_from_analyzers()
+    assert len(window.diagram.compounds) == 2
+    assert window.diagram.compounds[0].energy == -99.98
+
+
+def test_the_picker_skips_rows_without_a_name_and_follows_take(orca_analyzer, qapp):
+    from energy_diagram import analyzers
+    from energy_diagram.window import AnalyzerValuesDialog
+
+    orca_analyzer.show()
+    (result,) = analyzers.open_results(qapp.topLevelWidgets())
+    dialog = AnalyzerValuesDialog(analyzers.values(result), "E")
+    assert [name for name, _ in dialog.chosen()] == ["TS_1"]
+    assert dialog.chosen()[0][1].key == "E"
+    dialog.table.item(0, dialog.COL_NAME).setText("  ")
+    assert dialog.chosen() == []
+    dialog.close()
