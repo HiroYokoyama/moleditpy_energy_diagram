@@ -1,0 +1,19 @@
+{
+  "source": "energy_diagram/__init__.py",
+  "title": "Reaction Energy Diagram",
+  "package": "energy_diagram",
+  "archive": "energy_diagram_{version}.zip",
+  "assets": [
+    "energy_diagram_{version}.zip"
+  ],
+  "include": [
+    "README.md",
+    "LICENSE",
+    "COPYING",
+    "LICENSING.md"
+  ],
+  "exclude": [
+    "*/__pycache__/*",
+    "*/.git/*"
+  ]
+}

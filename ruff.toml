@@ -1,0 +1,6 @@
+# Common tool copies are validated and formatted only in their canonical repositories.
+extend-exclude = ["scripts/release_common.py", "tests/plugin_api_checker.py"]
+# MoleditPy 5 runs on Python 3.9 and later; syntax newer than that would stop
+# the plugin from importing there.
+target-version = "py39"
+line-length = 100
