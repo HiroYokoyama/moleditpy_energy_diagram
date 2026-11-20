@@ -12,7 +12,7 @@ from energy_diagram.session import Session
 
 def test_metadata_the_registry_reads():
     assert energy_diagram.PLUGIN_NAME == "Reaction Energy Diagram"
-    assert energy_diagram.PLUGIN_VERSION == "0.0.1"
+    assert energy_diagram.PLUGIN_VERSION == "0.0.2"
     assert energy_diagram.PLUGIN_DEPENDENCIES == ["matplotlib"]
     assert energy_diagram.PLUGIN_SUPPORTED_MOLEDITPY_VERSION.startswith(">=5")
     assert not hasattr(energy_diagram, "run")
