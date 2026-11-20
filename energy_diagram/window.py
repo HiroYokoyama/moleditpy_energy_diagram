@@ -10,8 +10,16 @@ from __future__ import annotations
 import logging
 import os
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QCursor, QImage, QKeySequence
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QCursor,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -23,6 +31,8 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -45,6 +55,7 @@ from PySide6.QtWidgets import (
 # isort: split
 # PySide6 must be imported first, so matplotlib's Qt backend uses it and not
 # another binding named by QT_API.
+import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
@@ -79,6 +90,18 @@ ITEM_NAMES = {
 }
 
 
+class DiagramCanvas(FigureCanvasQTAgg):
+    """Draws with the diagram's math-text fonts, as render() and export do."""
+
+    def __init__(self, figure, style):
+        super().__init__(figure)
+        self._style = style
+
+    def draw(self):
+        with matplotlib.rc_context(render.math_rc(self._style())):
+            super().draw()
+
+
 class DiagramWindow(QMainWindow):
     def __init__(self, session, context=None, parent=None):
         super().__init__(parent)
@@ -90,7 +113,7 @@ class DiagramWindow(QMainWindow):
         self.setWindowTitle(TITLE)
         self.resize(1280, 760)
         self.figure = Figure(dpi=SCREEN_DPI)
-        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas = DiagramCanvas(self.figure, lambda: self.diagram.style)
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setSingleShot(True)
         self._redraw_timer.setInterval(120)
@@ -314,50 +337,72 @@ class DiagramWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         inner = QWidget()
-        form = QFormLayout(inner)
+        column = QVBoxLayout(inner)
         scroll.setWidget(inner)
         outer.addWidget(scroll)
         self.style_widgets = {}
+        families = font_families()
+        form = None
 
-        def combo(name, choices, label):
+        def group(title):
+            nonlocal form
+            box = QGroupBox(title)
+            form = QFormLayout(box)
+            column.addWidget(box)
+            return box
+
+        def keep(name, widget, label=None, tip=""):
+            self.style_widgets[name] = widget
+            if tip:
+                widget.setToolTip(tip)
+            if label is None:
+                form.addRow(widget)
+            else:
+                form.addRow(label, widget)
+            return widget
+
+        def combo(name, choices, label, tip=""):
             widget = QComboBox()
             for key, text in choices:
                 widget.addItem(text, key)
             widget.currentIndexChanged.connect(
                 lambda _=0, n=name, w=widget: self._style_set(n, w.currentData())
             )
-            self.style_widgets[name] = widget
-            form.addRow(label, widget)
+            return keep(name, widget, label, tip)
 
-        def text(name, label, placeholder=""):
+        def text(name, label, placeholder="", tip=""):
             widget = QLineEdit()
             widget.setPlaceholderText(placeholder)
             widget.textChanged.connect(lambda value, n=name: self._style_set(n, value))
-            self.style_widgets[name] = widget
-            form.addRow(label, widget)
+            return keep(name, widget, label, tip)
 
-        def number(name, label, low, high, step, decimals=1, suffix=""):
+        def number(name, label, low, high, step, decimals=1, suffix="", special="", tip=""):
             widget = QDoubleSpinBox()
             widget.setRange(low, high)
             widget.setSingleStep(step)
             widget.setDecimals(decimals)
             widget.setSuffix(suffix)
+            if special:
+                widget.setSpecialValueText(special)
             widget.valueChanged.connect(lambda value, n=name: self._style_set(n, float(value)))
-            self.style_widgets[name] = widget
-            form.addRow(label, widget)
+            return keep(name, widget, label, tip)
 
-        def check(name, label):
+        def check(name, label, tip=""):
             widget = QCheckBox(label)
             widget.toggled.connect(lambda value, n=name: self._style_set(n, bool(value)))
-            self.style_widgets[name] = widget
-            form.addRow(widget)
+            return keep(name, widget, None, tip)
 
-        units = [(u, u) for u in model.UNITS]
-        combo("input_unit", units, "Numbers typed in:")
+        def color(name, label, pathway=False):
+            widget = ColorButton(pathway)
+            widget.changed.connect(lambda value, n=name: self._style_set(n, value))
+            return keep(name, widget, label)
+
+        group("Energies")
+        combo("input_unit", [(u, u) for u in model.UNITS], "Numbers typed in:")
         combo(
             "display_unit",
             [(u, u) for u in model.UNITS if u != "Hartree"] + [("Hartree", "Hartree")],
-            "Axis unit:",
+            "Shown in:",
         )
         combo(
             "zero",
@@ -367,10 +412,68 @@ class DiagramWindow(QMainWindow):
             ],
             "Zero:",
         )
-        text("quantity", "Quantity:", "ΔG")
-        text("y_label", "Axis title:", "automatic: quantity (unit)")
-        text("x_label", "Bottom title:")
-        text("title", "Figure title:")
+        widget = QSpinBox()
+        widget.setRange(0, 6)
+        widget.valueChanged.connect(lambda value: self._style_set("decimals", int(value)))
+        keep("decimals", widget, "Decimals:")
+        check("energy_parentheses", "Values in parentheses")
+        check("energy_sign", "Plus sign on positive values")
+        check("energy_unit_suffix", "Unit after each value")
+
+        group("Words")
+        math_tip = "Math text works here, e.g. TS$_1$, $\\mathbf{1}$ or $\\mathit{cis}$."
+        text("quantity", "Quantity:", "ΔG", "The symbol on the axis and the barriers.")
+        check(
+            "quantity_italic",
+            "Italic letters in the symbol (Δ𝐺, as IUPAC writes quantities)",
+            "Δ and other characters stay upright.",
+        )
+        text("y_label", "Energy axis title:", "automatic: quantity (unit)", math_tip)
+        text("x_label", "Bottom title:", "", math_tip)
+        text("title", "Figure title:", "", math_tip)
+        note = QLabel("Level labels accept math text too.")
+        note.setWordWrap(True)
+        form.addRow(note)
+
+        box = group("Text")
+        main = FontCombo(families)
+        main.currentIndexChanged.connect(
+            lambda _=0: self._style_set("font_family", main.currentData())
+        )
+        keep("font_family", main, "Main font:", "Used by every text that names no font of its own.")
+        grid = QGridLayout()
+        for col, head in enumerate(["", "Font", "Size", "Bold", "Italic", "Colour"]):
+            grid.addWidget(QLabel(f"<b>{head}</b>"), 0, col)
+        for row, (role, title) in enumerate(model.TEXT_ROLES.items(), start=1):
+            grid.addWidget(QLabel(title), row, 0)
+            font = FontCombo(families, main_entry=True)
+            font.currentIndexChanged.connect(
+                lambda _=0, n=f"{role}_font", w=font: self._style_set(n, w.currentData())
+            )
+            self.style_widgets[f"{role}_font"] = font
+            grid.addWidget(font, row, 1)
+            size = QDoubleSpinBox()
+            size.setRange(1, 72)
+            size.setSingleStep(0.5)
+            size.setDecimals(1)
+            size.setSuffix(" pt")
+            size.valueChanged.connect(lambda v, n=f"{role}_size": self._style_set(n, float(v)))
+            self.style_widgets[f"{role}_size"] = size
+            grid.addWidget(size, row, 2)
+            for col, prop in ((3, "bold"), (4, "italic")):
+                tick = QCheckBox()
+                tick.toggled.connect(lambda v, n=f"{role}_{prop}": self._style_set(n, bool(v)))
+                self.style_widgets[f"{role}_{prop}"] = tick
+                grid.addWidget(tick, row, col)
+            swatch = ColorButton(role in model.PATHWAY_ROLES)
+            swatch.changed.connect(lambda v, n=f"{role}_color": self._style_set(n, v))
+            self.style_widgets[f"{role}_color"] = swatch
+            grid.addWidget(swatch, row, 5)
+        grid.setColumnStretch(1, 1)
+        form.addRow(grid)
+        box.setToolTip("Fonts are looked up by name when drawing; a missing one falls back.")
+
+        group("Levels and connectors")
         combo(
             "connector",
             [
@@ -382,30 +485,57 @@ class DiagramWindow(QMainWindow):
             ],
             "Connectors:",
         )
+        color("connector_color", "Connector colour:", pathway=True)
         number("level_width", "Level width:", 0.1, 0.95, 0.05, 2)
         number("level_linewidth", "Level thickness:", 0.5, 8, 0.25, 2, " pt")
         number("connector_linewidth", "Connector thickness:", 0.25, 5, 0.25, 2, " pt")
-        widget = QSpinBox()
-        widget.setRange(0, 6)
-        widget.valueChanged.connect(lambda value: self._style_set("decimals", int(value)))
-        self.style_widgets["decimals"] = widget
-        form.addRow("Decimals:", widget)
-        check("energy_parentheses", "Values in parentheses")
-        check("energy_sign", "Plus sign on positive values")
-        check("energy_unit_suffix", "Unit after each value")
-        check("show_barriers", "Show barriers (‡ arrows)")
-        check("show_structures", "Show structures")
+        number("text_gap", "Gap to label and value:", 0, 30, 0.5, 1, " pt")
+
+        group("Barriers")
+        check("show_barriers", "Show barriers (‡ arrows from the minimum before each TS)")
+        check("barrier_symbol", "Write the symbol before the value (Δ𝐺‡ = …)")
+        combo("barrier_arrow", list(model.BARRIER_ARROWS.items()), "Arrow:")
+        number("barrier_linewidth", "Arrow thickness:", 0.25, 5, 0.25, 2, " pt")
+        check("barrier_guide", "Dotted guide from the minimum")
+
+        group("Structures")
+        check("show_structures", "Show structures (drawn from each level's SMILES)")
         number("structure_size", "Structure size:", 0.2, 3, 0.05, 2, " in")
-        check("show_legend", "Legend (several pathways)")
+
+        group("Axes")
         check("show_y_axis", "Energy axis")
-        text("font_family", "Font:", "Arial")
-        number("font_size", "Axis font size:", 4, 30, 0.5, 1, " pt")
-        number("label_size", "Label size:", 4, 30, 0.5, 1, " pt")
-        number("energy_size", "Value size:", 4, 30, 0.5, 1, " pt")
-        check("label_bold", "Bold labels")
+        check("show_x_axis", "Bottom axis line")
+        number("axis_linewidth", "Axis line thickness:", 0.25, 5, 0.25, 2, " pt")
+        color("axis_line_color", "Axis line colour:")
+        combo(
+            "tick_direction",
+            [("out", "Outward"), ("in", "Inward"), ("inout", "Across")],
+            "Tick marks:",
+        )
+        check("y_fixed", "Fixed energy range")
+        number("y_min", "From:", -100000, 100000, 5, 2)
+        number("y_max", "To:", -100000, 100000, 5, 2)
+        number("y_step", "Tick every:", 0, 100000, 5, 2, "", "Automatic")
+        number("x_margin", "Side margin:", 0, 5, 0.1, 2, "", "", "In level spacings.")
+
+        group("Legend")
+        check("show_legend", "Legend (when several pathways are shown)")
+        combo(
+            "legend_location",
+            [(loc, loc.capitalize()) for loc in model.LEGEND_LOCATIONS],
+            "Position:",
+        )
+        check("legend_frame", "Frame")
+
+        group("Figure")
         number("fig_width", "Width:", 1, 20, 0.1, 2, " in")
         number("fig_height", "Height:", 1, 20, 0.1, 2, " in")
+        color("background", "Background:")
         check("transparent", "Transparent background")
+        reset = QPushButton("Reset Style to Defaults")
+        reset.clicked.connect(self.reset_style)
+        column.addWidget(reset)
+        column.addStretch(1)
         return page
 
     # ============================================================ refreshing
@@ -537,8 +667,15 @@ class DiagramWindow(QMainWindow):
         for name, widget in self.style_widgets.items():
             value = getattr(style, name)
             widget.blockSignals(True)
-            if isinstance(widget, QComboBox):
-                widget.setCurrentIndex(max(0, widget.findData(value)))
+            if isinstance(widget, ColorButton):
+                widget.set_value(value)
+            elif isinstance(widget, QComboBox):
+                index = widget.findData(value)
+                if index < 0 and isinstance(value, str) and value:
+                    # A font this computer does not list, from someone else's file.
+                    widget.addItem(value, value)
+                    index = widget.count() - 1
+                widget.setCurrentIndex(max(0, index))
             elif isinstance(widget, QLineEdit):
                 widget.setText(value)
             elif isinstance(widget, QCheckBox):
@@ -549,11 +686,21 @@ class DiagramWindow(QMainWindow):
 
     # ================================================================= edits
     def _style_set(self, name: str, value) -> None:
-        if self._filling:
+        if self._filling or value is None:  # None: a list with nothing chosen
             return
         setattr(self.diagram.style, name, value)
         if name in ("input_unit", "display_unit", "zero", "decimals"):
             self._refresh_values()
+        self._changed()
+
+    def reset_style(self) -> None:
+        self.diagram.style = model.Style()
+        self._filling = True
+        try:
+            self._fill_style()
+        finally:
+            self._filling = False
+        self._refresh_values()
         self._changed()
 
     def _project_toggled(self, checked: bool) -> None:
@@ -1213,6 +1360,70 @@ class AnalyzerValuesDialog(QDialog):
             if name:
                 picked.append((name, value))
         return picked
+
+
+def font_families() -> list:
+    """The font families matplotlib can draw with; it, not Qt, draws the figure."""
+    from matplotlib import font_manager
+
+    return sorted({font.name for font in font_manager.fontManager.ttflist}, key=str.casefold)
+
+
+class FontCombo(QComboBox):
+    """A font family list; with ``main_entry`` the first item means the main font."""
+
+    def __init__(self, families, main_entry=False, parent=None):
+        super().__init__(parent)
+        if main_entry:
+            self.addItem("Main font", "")
+        for family in families:
+            self.addItem(family, family)
+        self.setMaxVisibleItems(20)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(10)
+
+
+class ColorButton(QPushButton):
+    """A colour swatch; a click offers the pathway's colour (if allowed) or any colour."""
+
+    changed = Signal(str)
+
+    def __init__(self, pathway=False, parent=None):
+        super().__init__(parent)
+        self.pathway = pathway
+        self.value = "#000000"
+        self.clicked.connect(self._choose)
+        self.set_value(self.value)
+
+    def set_value(self, value: str) -> None:
+        self.value = value
+        if value == model.PATHWAY_COLOR:
+            self.setText("Pathway")
+            self.setIcon(QIcon())
+        else:
+            pixmap = QPixmap(14, 14)
+            pixmap.fill(QColor(value))
+            self.setIcon(QIcon(pixmap))
+            self.setText(value)
+
+    def _choose(self) -> None:
+        if self.pathway:
+            menu = QMenu(self)
+            menu.addAction("Pathway Colour", lambda: self.pick(model.PATHWAY_COLOR))
+            menu.addAction("Choose...", self._dialog)
+            menu.exec(QCursor.pos())
+        else:
+            self._dialog()
+
+    def _dialog(self) -> None:
+        start = QColor("#000000" if self.value == model.PATHWAY_COLOR else self.value)
+        chosen = QColorDialog.getColor(start, self, "Colour")
+        if chosen.isValid():
+            self.pick(chosen.name())
+
+    def pick(self, value: str) -> None:
+        self.set_value(value)
+        self.changed.emit(value)
 
 
 def loaded_smiles(context) -> str:

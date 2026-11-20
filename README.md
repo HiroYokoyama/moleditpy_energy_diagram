@@ -38,12 +38,24 @@ MoleditPy never clears it, so values can be gathered across many output files.
 - **Mouse placement**: drag any label, value, structure or barrier value to move it.
   Right-click it to hide it, edit it or put it back; right-click a level for its
   colour and visibility. Click a level to find it in the table.
-- **Style**: dashed, dotted, solid, smooth-curve or no connectors; bar width and line
-  widths; font, sizes and bold labels; number of decimals, sign, parentheses and unit
-  on values; axis and figure titles; barrier arrows (ΔG‡) from the minimum before each
-  transition state; 2D structures drawn from SMILES (**Structure from Loaded
-  Molecule** takes the molecule in MoleditPy); legend, energy axis, figure size and a
-  transparent background.
+- **Style**: everything on the figure can be set.
+  - Text: a main font, and for level labels, values, barrier values, axis titles, axis
+    numbers, the figure title and the legend each its own font, size, bold, italic and
+    colour (values and labels can follow their pathway's colour).
+  - The quantity symbol is written as IUPAC does by default: Δ*G*, with the letter
+    italic and Δ upright, and Δ*G*‡ on barriers. Labels and titles accept matplotlib
+    math text, e.g. `TS$_1$` or `$\mathbf{1}$`.
+  - Energies: decimals, sign, parentheses and unit on values.
+  - Levels and connectors: dashed, dotted, solid, smooth-curve or no connectors, their
+    colour and thickness, bar width and thickness, the gap to labels and values.
+  - Barriers (Δ*G*‡) from the minimum before each transition state: arrow heads,
+    thickness, the dotted guide, and whether the symbol is written.
+  - 2D structures drawn from SMILES (**Structure from Loaded Molecule** takes the
+    molecule in MoleditPy) and their size.
+  - Axes: energy axis and bottom line, line thickness and colour, tick direction, a
+    fixed range and tick interval, side margins.
+  - Legend position and frame; figure size, background colour or transparency.
+    **Reset Style to Defaults** puts it all back.
 - The figure on screen has the exported size, so what is placed is what is exported.
   SVG keeps text as text for later editing; PDF and EPS embed the fonts.
 - **Files**: diagrams are saved as `.pmeedg` files, which MoleditPy opens directly.

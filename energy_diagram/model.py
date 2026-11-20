@@ -157,40 +157,138 @@ class Pathway:
         return out
 
 
+#: Text on the figure, each styled on its own: role -> what the user sees.
+TEXT_ROLES = {
+    "label": "Level labels",
+    "energy": "Values",
+    "barrier": "Barrier values",
+    "axis": "Axis titles",
+    "tick": "Axis numbers",
+    "title": "Figure title",
+    "legend": "Legend",
+}
+#: A colour that follows the level's (or pathway's) colour.
+PATHWAY_COLOR = "pathway"
+#: Roles for which following the pathway colour makes sense.
+PATHWAY_ROLES = ("label", "energy", "barrier")
+BARRIER_ARROWS = {"<->": "Both ends", "->": "Head at the TS", "-": "Plain line"}
+TICK_DIRECTIONS = ["out", "in", "inout"]
+LEGEND_LOCATIONS = [
+    "best",
+    "upper right",
+    "upper left",
+    "lower left",
+    "lower right",
+    "upper center",
+    "lower center",
+    "center left",
+    "center right",
+]
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
 @dataclass
 class Style:
+    # Energies
     input_unit: str = "kcal/mol"
     display_unit: str = "kcal/mol"
     zero: str = ZERO_FIRST
-    quantity: str = "ΔG"
-    y_label: str = ""  # empty: "<quantity> (<unit>)"
-    x_label: str = "Reaction coordinate"
-    title: str = ""
-    connector: str = "dashed"
-    level_width: float = 0.6
-    level_linewidth: float = 2.5
-    connector_linewidth: float = 1.0
-    font_family: str = "Arial"
-    font_size: float = 10.0
-    label_size: float = 10.0
-    energy_size: float = 9.0
     decimals: int = 1
     energy_parentheses: bool = False
     energy_sign: bool = False
     energy_unit_suffix: bool = False
+    # Words
+    quantity: str = "ΔG"
+    quantity_italic: bool = True  # the letters of the symbol, as IUPAC writes them
+    y_label: str = ""  # empty: "<quantity> (<unit>)"
+    x_label: str = "Reaction coordinate"
+    title: str = ""
+    font_family: str = "Arial"  # the main font; each text may name its own
+    # Each text: font ("" = main font), size, bold, italic, colour.
+    label_font: str = ""
+    label_size: float = 10.0
     label_bold: bool = False
+    label_italic: bool = False
+    label_color: str = "#000000"
+    energy_font: str = ""
+    energy_size: float = 9.0
+    energy_bold: bool = False
+    energy_italic: bool = False
+    energy_color: str = PATHWAY_COLOR
+    barrier_font: str = ""
+    barrier_size: float = 9.0
+    barrier_bold: bool = False
+    barrier_italic: bool = False
+    barrier_color: str = PATHWAY_COLOR
+    axis_font: str = ""
+    axis_size: float = 10.0
+    axis_bold: bool = False
+    axis_italic: bool = False
+    axis_color: str = "#000000"
+    tick_font: str = ""
+    tick_size: float = 10.0
+    tick_bold: bool = False
+    tick_italic: bool = False
+    tick_color: str = "#000000"
+    title_font: str = ""
+    title_size: float = 11.0
+    title_bold: bool = False
+    title_italic: bool = False
+    title_color: str = "#000000"
+    legend_font: str = ""
+    legend_size: float = 10.0
+    legend_bold: bool = False
+    legend_italic: bool = False
+    legend_color: str = "#000000"
+    # Levels and connectors
+    connector: str = "dashed"
+    connector_color: str = PATHWAY_COLOR
+    level_width: float = 0.6
+    level_linewidth: float = 2.5
+    connector_linewidth: float = 1.0
+    text_gap: float = 3.0  # points between a bar and its label or value
+    # Barriers
     show_barriers: bool = False
+    barrier_symbol: bool = True  # "ΔG‡ = " before the value
+    barrier_arrow: str = "<->"
+    barrier_linewidth: float = 0.9
+    barrier_guide: bool = True
+    # Structures
     show_structures: bool = False
     structure_size: float = 0.6  # inches
-    show_legend: bool = True
+    # Axes
     show_y_axis: bool = True
+    show_x_axis: bool = False
+    axis_linewidth: float = 0.8
+    axis_line_color: str = "#000000"
+    tick_direction: str = "out"
+    y_fixed: bool = False
+    y_min: float = -30.0
+    y_max: float = 30.0
+    y_step: float = 0.0  # 0: automatic
+    x_margin: float = 0.5  # in level spacings
+    # Legend
+    show_legend: bool = True
+    legend_location: str = "best"
+    legend_frame: bool = False
+    # Figure
     fig_width: float = 6.0
     fig_height: float = 4.0
+    background: str = "#ffffff"
     transparent: bool = False
 
     @classmethod
     def from_dict(cls, data):
+        data = dict(data) if isinstance(data, dict) else {}
+        # Version 0.0.1 had one "font_size" for the axis, its numbers and the legend.
+        old_size = data.get("font_size")
+        numeric = isinstance(old_size, (int, float)) and not isinstance(old_size, bool)
+        if numeric and "axis_size" not in data:
+            for key in ("axis_size", "tick_size", "legend_size"):
+                data.setdefault(key, float(old_size))
+            data.setdefault("title_size", float(old_size) + 1)
         out = _from_dict(cls, data)
+        defaults = cls()
         if out.input_unit not in PER_HARTREE:
             out.input_unit = "kcal/mol"
         if out.display_unit not in PER_HARTREE:
@@ -199,7 +297,30 @@ class Style:
             out.zero = ZERO_FIRST
         if out.connector not in CONNECTORS:
             out.connector = "dashed"
+        if out.barrier_arrow not in BARRIER_ARROWS:
+            out.barrier_arrow = defaults.barrier_arrow
+        if out.tick_direction not in TICK_DIRECTIONS:
+            out.tick_direction = defaults.tick_direction
+        if out.legend_location not in LEGEND_LOCATIONS:
+            out.legend_location = defaults.legend_location
+        for name in [f"{role}_color" for role in TEXT_ROLES] + [
+            "connector_color",
+            "axis_line_color",
+            "background",
+        ]:
+            value = getattr(out, name)
+            allowed = value == PATHWAY_COLOR and (
+                name == "connector_color" or name[:-6] in PATHWAY_ROLES
+            )
+            if not (allowed or _HEX.match(value)):
+                setattr(out, name, getattr(defaults, name))
         out.decimals = max(0, min(6, int(out.decimals)))
+        for name in [f"{role}_size" for role in TEXT_ROLES]:
+            if not 1.0 <= getattr(out, name) <= 72.0:
+                setattr(out, name, getattr(defaults, name))
+        if out.y_max <= out.y_min:
+            out.y_fixed = False
+        out.y_step = max(0.0, out.y_step)
         return out
 
     def axis_label(self) -> str:
@@ -511,7 +632,8 @@ def layout(diagram: Diagram, curve_points: int = 40) -> Layout:
     if levels:
         xs = [g.x0 for g in levels] + [g.x1 for g in levels]
         ys = [g.y for g in levels]
-        x_range = (min(xs) - 0.5, max(xs) + 0.5)
+        margin = max(0.0, style.x_margin)
+        x_range = (min(xs) - margin, max(xs) + margin)
         span = (max(ys) - min(ys)) or 10.0
         y_range = (min(ys) - 0.22 * span, max(ys) + 0.22 * span)
     else:

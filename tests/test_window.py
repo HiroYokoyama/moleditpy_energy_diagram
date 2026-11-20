@@ -486,3 +486,71 @@ def test_the_picker_skips_rows_without_a_name_and_follows_take(orca_analyzer, qa
     dialog.table.item(0, dialog.COL_NAME).setText("  ")
     assert dialog.chosen() == []
     dialog.close()
+
+
+# ------------------------------------------------------------------ style
+
+
+def test_every_style_setting_has_a_control(window):
+    from dataclasses import fields
+
+    assert set(window.style_widgets) == {f.name for f in fields(model.Style)}
+
+
+def test_the_text_grid_writes_each_role(window):
+    w = window.style_widgets
+    w["label_italic"].setChecked(True)
+    w["energy_bold"].setChecked(True)
+    w["tick_size"].setValue(7.5)
+    w["title_font"].setCurrentIndex(w["title_font"].findData("DejaVu Serif"))
+    w["barrier_color"].pick("#336699")
+    style = window.diagram.style
+    assert style.label_italic and style.energy_bold and style.tick_size == 7.5
+    assert style.title_font == "DejaVu Serif"  # matplotlib's own fonts are always listed
+    assert style.barrier_color == "#336699"
+    w["barrier_color"].pick(model.PATHWAY_COLOR)
+    assert style.barrier_color == model.PATHWAY_COLOR
+    assert w["barrier_color"].text() == "Pathway"
+    assert window.session.dirty
+
+
+def test_a_font_missing_here_is_kept_from_the_file(window):
+    window.diagram.style.font_family = "No Such Font 123"
+    window.diagram.style.label_font = "Another Missing Font"
+    window.refresh_all()
+    assert window.style_widgets["font_family"].currentText() == "No Such Font 123"
+    assert window.style_widgets["label_font"].currentData() == "Another Missing Font"
+    assert window.style_widgets["energy_font"].currentText() == "Main font"
+
+
+def test_style_controls_follow_an_opened_diagram_and_reset(window):
+    window.diagram.style.quantity_italic = False
+    window.diagram.style.y_step = 10.0
+    window.diagram.style.background = "#abcdef"
+    window.refresh_all()
+    w = window.style_widgets
+    assert not w["quantity_italic"].isChecked()
+    assert w["y_step"].value() == 10.0
+    assert w["background"].value == "#abcdef"
+    window.reset_style()
+    assert window.diagram.style == model.Style()
+    assert w["quantity_italic"].isChecked() and w["y_step"].text() == "Automatic"
+
+
+def test_the_canvas_draws_with_the_diagram_fonts(window, monkeypatch):
+    import matplotlib
+
+    seen = []
+    original = window.figure.draw
+
+    def draw(renderer):
+        seen.append(matplotlib.rcParams["mathtext.it"])
+        return original(renderer)
+
+    monkeypatch.setattr(window.figure, "draw", draw)
+    window.style_widgets["show_barriers"].setChecked(True)
+    add_levels(window, "0", "10")
+    window.redraw()
+    window.canvas.draw()
+    assert seen and seen[-1].endswith(":italic")
+    assert matplotlib.rcParams["mathtext.fontset"] != "custom"

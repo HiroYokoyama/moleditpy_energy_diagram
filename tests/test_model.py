@@ -191,12 +191,13 @@ def test_reading_tolerates_damage_and_refuses_strangers():
     data = model.Diagram().to_dict()
     data["style"]["connector"] = "zigzag"
     data["style"]["decimals"] = 99
-    data["style"]["font_size"] = "big"
+    data["style"]["label_size"] = "big"
+    data["style"]["font_size"] = "big"  # a 0.0.1 key, broken
     data["pathways"] = [
         {"name": "p", "levels": [{"kind": "??", "label_offset": "x", "position": "a"}, 5]}
     ]
     d = model.Diagram.from_dict(data)
-    assert d.style.connector == "dashed" and d.style.decimals == 6 and d.style.font_size == 10.0
+    assert d.style.connector == "dashed" and d.style.decimals == 6 and d.style.label_size == 10.0
     level = d.pathways[0].levels[0]
     assert (
         level.kind == model.KIND_MIN and level.label_offset == [0.0, 0.0] and level.position is None
@@ -223,3 +224,53 @@ def test_axis_label():
     style.y_label = "Relative energy"
     assert style.axis_label() == "Relative energy"
     assert not math.isnan(style.fig_width)
+
+
+def test_files_from_0_0_1_keep_their_text_sizes():
+    old = {"font_size": 12, "label_size": 11, "label_bold": True, "connector": "solid"}
+    style = model.Style.from_dict(old)
+    assert (style.axis_size, style.tick_size, style.legend_size, style.title_size) == (
+        12,
+        12,
+        12,
+        13,
+    )
+    assert style.label_size == 11 and style.label_bold and style.connector == "solid"
+    assert style.quantity_italic  # new settings take their defaults
+
+
+def test_style_values_are_checked():
+    bad = {
+        "label_color": "pathway",
+        "tick_color": model.PATHWAY_COLOR,
+        "energy_color": "red",
+        "connector_color": model.PATHWAY_COLOR,
+        "background": "#12345",
+        "barrier_arrow": "<=>",
+        "tick_direction": "up",
+        "legend_location": "moon",
+        "title_size": 500.0,
+        "y_fixed": True,
+        "y_min": 5.0,
+        "y_max": -5.0,
+        "y_step": -1.0,
+    }
+    style = model.Style.from_dict(bad)
+    assert style.label_color == model.PATHWAY_COLOR  # labels may follow the pathway
+    assert style.tick_color == "#000000"  # axis numbers may not
+    assert style.energy_color == model.PATHWAY_COLOR  # not a #rrggbb colour
+    assert style.connector_color == model.PATHWAY_COLOR
+    assert style.background == "#ffffff"
+    assert (style.barrier_arrow, style.tick_direction, style.legend_location) == (
+        "<->",
+        "out",
+        "best",
+    )
+    assert style.title_size == 11.0
+    assert not style.y_fixed and style.y_step == 0.0
+
+
+def test_side_margin():
+    d = diagram(0, 1)
+    d.style.x_margin = 1.25
+    assert model.layout(d).x_range == (-0.3 - 1.25, 1.3 + 1.25)
